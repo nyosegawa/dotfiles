@@ -1,4 +1,58 @@
-# tmux + Ghostty 開発環境
+# dotfiles
+
+macOS 開発環境の設定ファイル集。
+
+## 構成
+
+```
+dotfiles/
+├── ghostty/         # Ghostty ターミナル設定
+│   └── config
+├── starship/        # Starship プロンプト設定
+│   └── starship.toml
+├── tmux/            # tmux 設定 + dev-tmux スクリプト
+│   ├── tmux.conf
+│   └── dev-tmux
+├── zsh/             # zsh 追加設定
+│   └── zshrc-dev.zsh
+└── example/         # プロジェクト設定サンプル
+    └── myapp.conf
+```
+
+## セットアップ
+
+```bash
+# Starship
+cp starship/starship.toml ~/.config/starship.toml
+
+# Ghostty
+mkdir -p ~/.config/ghostty
+cp ghostty/config ~/.config/ghostty/config
+
+# tmux
+cp tmux/tmux.conf ~/.tmux.conf
+cp tmux/dev-tmux ~/bin/
+chmod +x ~/bin/dev-tmux
+
+# zsh
+cat zsh/zshrc-dev.zsh >> ~/.zshrc
+source ~/.zshrc
+```
+
+## Starship
+
+`~/.config/starship.toml` に配置。ミニマルな 2 行プロンプト。
+
+```
+~/src/myapp  main ?1          14:30
+❯
+```
+
+- 1 行目: ディレクトリ (フルパス) + Git ブランチ + ステータス / 右に時刻
+- 2 行目: `❯` (成功=緑, エラー=赤)
+- 言語ランタイム・クラウド・ユーザー名等は非表示
+
+## dev-tmux
 
 1プロジェクト = 1ウィンドウ = 4ペイン固定レイアウトで、複数プロジェクトをウィンドウ単位で切り替える tmux 開発環境。
 
@@ -17,44 +71,16 @@
 | 3 (中央) | サーバー (`npm run dev` 等) | `Option+R` で起動/再起動 |
 | 4 (右)   | フロントエンド等 | `Option+R` で起動/再起動 |
 
-## セットアップ
+### クイックスタート
 
 ```bash
-# スクリプト配置
-cp dev-tmux ~/bin/
-chmod +x ~/bin/dev-tmux
-
-# tmux設定
-cp tmux.conf ~/.tmux.conf
-
-# Ghostty設定
-mkdir -p ~/.config/ghostty
-cp ghostty-config ~/.config/ghostty/config
-
-# zshrc に追記
-cat zshrc-dev.zsh >> ~/.zshrc
-source ~/.zshrc
-```
-
-## クイックスタート
-
-```bash
-# プロジェクト登録 (カレントディレクトリの名前とパスで自動登録)
 cd ~/src/myapp
-dev add
-
-# 名前やディレクトリを指定して登録することも可能
-dev add myapp ~/src/myapp
-
-# ペイン3,4のコマンドを設定 (tmux内なら名前省略可)
-dev config
-dev config myapp
-
-# 起動
-dev
+dev add              # カレントディレクトリ名で登録
+dev config           # ペイン3,4のコマンドを設定
+dev                  # 起動
 ```
 
-## dev コマンド
+### dev コマンド
 
 ```
 dev                    全プロジェクトを開く (セッションあればアタッチ)
@@ -112,9 +138,7 @@ shell-integration-features = ssh-terminfo,ssh-env  # SSH先でterminfo自動設�
 `~/.config/dev-tmux/<name>.conf` に配置。`dev add` で雛形が生成される。
 
 ```bash
-# プロジェクト: myapp
 PROJECT_DIR="~/src/myapp"
-
 PANE1_CMD=""              # 左上 (空=手動起動)
 PANE2_CMD=""              # 左下 (空=手動起動)
 PANE3_DIR=""              # 中央ペインのサブディレクトリ (空=PROJECT_DIR)
@@ -127,4 +151,5 @@ PANE4_CMD="npm run frontend"  # 右 (Option+Rで起動)
 
 - tmux 3.2+ (3.6 で動作確認済み)
 - Ghostty (macos-option-as-alt 対応)
+- Starship
 - macOS (pbcopy 使用)
