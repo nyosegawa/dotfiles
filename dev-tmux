@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+# =============================================================================
+# dev-tmux: マルチプロジェクト開発セッション管理
+# =============================================================================
+set -euo pipefail
+
+SESSION="dev"
+CONF_DIR="$HOME/.config/dev-tmux"
+mkdir -p "$CONF_DIR"
+
+# =============================================================================
+# ユーティリティ
+# =============================================================================
+load_conf() {
+  local name="$1"
+  PROJECT_DIR="$HOME"; PANE1_CMD=""; PANE2_CMD=""
+  PANE3_DIR=""; PANE3_CMD=""; PANE4_DIR=""; PANE4_CMD=""
+  [[ -f "$CONF_DIR/${name}.conf" ]] && source "$CONF_DIR/${name}.conf"
+}
+
+conf_exists() { [[ -f "$CONF_DIR/${1}.conf" ]]; }
+
+resolve_dir() {
+  local base="$1" sub="$2"
+  if [[ -z "$sub" ]]; then echo "$base"
+  elif [[ "$sub" = /* ]] || [[ "$sub" = ~* ]]; then eval echo "$sub"
+  else echo "${base}/${sub}"
+  fi
+}
+
+# =============================================================================
+# 4ペインレイアウト作成
+# =============================================================================
+# ┌───────────┬───────┬───────┐
+# │ 1: Claude │ 3:srv │ 4:fnt │
+# ├───────────┤       │       │
+# │ 2: free   │       │       │
+# └───────────┴───────┴───────┘
+create_project_window() {
+  local name="$1" is_first="$2"
+  load_conf "$name"
+
+  local dir; dir=$(eval echo "$PROJECT_DIR")
+  local dir3; dir3=$(resolve_dir "$dir" "$PANE3_DIR")
+  local dir4; dir4=$(resolve_dir "$dir" "$PANE4_DIR")
+
+  if [[ "$is_first" == "first" ]]; then
+    tmux new-session -d -s "$SESSION" -n "$name" -c "$dir"
+  else
+    tmux new-window -t "$SESSION" -n "$name" -c "$dir"
+  fi
+
+  local t="$SESSION:$name"
+
+  # 左右分割 → pane1=左, pane2=右
+  tmux split-window -h -t "${t}.1" -c "$dir" -l 50%
+  # 左を上下分割 → pane1=左上, pane2=左下, pane3=右
+  tmux split-window -v -t "${t}.1" -c "$dir" -l 50%
+  # 右を左右分割 → pane3=中央, pane4=右
+  tmux split-window -h -t "${t}.3" -c "$dir4" -l 50%
+
+  # ペイン3のディレクトリ
+  [[ -n "$PANE3_DIR" ]] && tmux send-keys -t "${t}.3" "cd $(printf '%q' "$dir3")" Enter
+
+  # コマンド実行 (ペイン1,2のみ。3,4はOption+Rで起動)
+  [[ -n "$PANE1_CMD" ]] && tmux send-keys -t "${t}.1" "$PANE1_CMD" Enter
+  [[ -n "$PANE2_CMD" ]] && tmux send-keys -t "${t}.2" "$PANE2_CMD" Enter
+
+  tmux select-pane -t "${t}.1"
+}
+
+# =============================================================================
+# dev (引数なし): 全プロジェクトを開いてアタッチ
+# =============================================================================
+cmd_default() {
+  # 全confを集める
+  local names=()
+  if ls "$CONF_DIR"/*.conf &>/dev/null; then
+    for f in "$CONF_DIR"/*.conf; do
+      names+=("$(basename "$f" .conf)")
+    done
+  fi
+
+  if [[ ${#names[@]} -eq 0 ]]; then
+    echo "プロジェクトがありません"
+    echo "  dev add [name] [dir]  で作成"
+    return 0
+  fi
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    # 未追加のウィンドウがあれば追加
+    local existing
+    existing=$(tmux list-windows -t "$SESSION" -F '#W')
+    for name in "${names[@]}"; do
+      if ! echo "$existing" | grep -qx "$name"; then
+        create_project_window "$name" "add"
+        echo "  [${name}] 追加"
+      fi
+    done
+    # アタッチ
+    if [[ -n "${TMUX:-}" ]]; then
+      tmux switch-client -t "$SESSION"
+    else
+      tmux attach-session -t "$SESSION"
+    fi
+  else
+    # 新規: 全プロジェクトを開く
+    local first=true
+    for name in "${names[@]}"; do
+      if [[ "$first" == true ]]; then
+        create_project_window "$name" "first"
+        first=false
+      else
+        create_project_window "$name" "add"
+      fi
+    done
+    tmux select-window -t "$SESSION:${names[0]}"
+    tmux attach-session -t "$SESSION"
+  fi
+}
+
+# =============================================================================
+# dev <name>: プロジェクトを開く (登録済みのみ)
+# =============================================================================
+cmd_open() {
+  local name="$1"
+
+  if ! conf_exists "$name"; then
+    echo "  未登録: $name"
+    echo "  dev add $name  で作成してください"
+    return 1
+  fi
+
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    create_project_window "$name" "first"
+  else
+    if tmux list-windows -t "$SESSION" -F '#W' | grep -qx "$name"; then
+      tmux select-window -t "$SESSION:$name"
+    else
+      create_project_window "$name" "add"
+    fi
+  fi
+
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "$SESSION:$name"
+  else
+    tmux attach-session -t "$SESSION:$name"
+  fi
+}
+
+# =============================================================================
+# dev add [name] [dir]: 作成 → セッション中なら自動でウィンドウ追加
+# =============================================================================
+cmd_add() {
+  local name="${1:-$(basename "$(pwd)")}"
+  local dir="${2:-$(pwd)}"
+  local conf="$CONF_DIR/${name}.conf"
+
+  if [[ -f "$conf" ]]; then
+    echo "  既に存在: $name"
+    echo "  dev config  → 設定  /  dev $name  → 開く"
+    return 0
+  fi
+
+  cat > "$conf" << EOF
+# プロジェクト: $name
+
+PROJECT_DIR="$dir"
+
+PANE1_CMD=""
+PANE2_CMD=""
+PANE3_DIR=""
+PANE3_CMD=""
+PANE4_DIR=""
+PANE4_CMD=""
+EOF
+
+  echo "  作成: $name ($dir)"
+
+  # セッションが動いているなら自動でウィンドウ追加
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    create_project_window "$name" "add"
+    echo "  ウィンドウ追加済み (Shift+右で切り替え)"
+    # tmux内なら自動で切り替え
+    if [[ -n "${TMUX:-}" ]]; then
+      tmux select-window -t "$SESSION:$name"
+    fi
+  else
+    echo "  dev config → 設定  /  dev → 起動"
+  fi
+}
+
+# =============================================================================
+# dev edit <name>
+# =============================================================================
+cmd_edit() {
+  local name="$1"
+  if [[ ! -f "$CONF_DIR/${name}.conf" ]]; then
+    echo "  設定がありません: $name"
+    return 1
+  fi
+  "${EDITOR:-vim}" "$CONF_DIR/${name}.conf"
+}
+
+# =============================================================================
+# dev config [name]: 対話設定 (空Enter = クリア)
+# =============================================================================
+cmd_config() {
+  local name=""
+  if [[ -n "${1:-}" ]]; then
+    name="$1"
+  elif [[ -n "${TMUX:-}" ]]; then
+    name=$(tmux display-message -p '#W')
+  else
+    name=$(basename "$(pwd)")
+  fi
+
+  local conf="$CONF_DIR/${name}.conf"
+  if [[ ! -f "$conf" ]]; then
+    echo "  設定がありません: $name"
+    echo "  dev add で作成してください"
+    return 1
+  fi
+
+  load_conf "$name"
+  local dir_display; dir_display=$(eval echo "$PROJECT_DIR"); dir_display="${dir_display/#$HOME/~}"
+
+  while true; do
+    echo ""
+    echo "[$name] ($dir_display)"
+    echo ""
+    echo "  3) srv: ${PANE3_CMD:-(未設定)}"
+    [[ -n "$PANE3_DIR" ]] && echo "     dir: $PANE3_DIR"
+    echo "  4) fnt: ${PANE4_CMD:-(未設定)}"
+    [[ -n "$PANE4_DIR" ]] && echo "     dir: $PANE4_DIR"
+    echo ""
+    echo "  e) エディタ  q) 終了"
+    echo ""
+    printf "選択: "
+    read -r choice
+
+    case "$choice" in
+      3)
+        echo "  (空Enter = クリア、- = スキップ)"
+        printf "  コマンド [${PANE3_CMD:-(なし)}]: "
+        read -r val
+        if [[ "$val" != "-" ]]; then
+          PANE3_CMD="$val"
+          sed -i '' "s|^PANE3_CMD=.*|PANE3_CMD=\"$val\"|" "$conf" 2>/dev/null || \
+          sed -i    "s|^PANE3_CMD=.*|PANE3_CMD=\"$val\"|" "$conf"
+        fi
+        printf "  サブdir [${PANE3_DIR:-(なし)}]: "
+        read -r val
+        if [[ "$val" != "-" ]]; then
+          PANE3_DIR="$val"
+          sed -i '' "s|^PANE3_DIR=.*|PANE3_DIR=\"$val\"|" "$conf" 2>/dev/null || \
+          sed -i    "s|^PANE3_DIR=.*|PANE3_DIR=\"$val\"|" "$conf"
+        fi
+        echo "  → 保存"
+        ;;
+      4)
+        echo "  (空Enter = クリア、- = スキップ)"
+        printf "  コマンド [${PANE4_CMD:-(なし)}]: "
+        read -r val
+        if [[ "$val" != "-" ]]; then
+          PANE4_CMD="$val"
+          sed -i '' "s|^PANE4_CMD=.*|PANE4_CMD=\"$val\"|" "$conf" 2>/dev/null || \
+          sed -i    "s|^PANE4_CMD=.*|PANE4_CMD=\"$val\"|" "$conf"
+        fi
+        printf "  サブdir [${PANE4_DIR:-(なし)}]: "
+        read -r val
+        if [[ "$val" != "-" ]]; then
+          PANE4_DIR="$val"
+          sed -i '' "s|^PANE4_DIR=.*|PANE4_DIR=\"$val\"|" "$conf" 2>/dev/null || \
+          sed -i    "s|^PANE4_DIR=.*|PANE4_DIR=\"$val\"|" "$conf"
+        fi
+        echo "  → 保存"
+        ;;
+      e) "${EDITOR:-vim}" "$conf"; load_conf "$name" ;;
+      q|"") break ;;
+      *) echo "  3, 4, e, q のいずれか" ;;
+    esac
+  done
+
+  echo "  反映: dev restart $name / Option+R"
+}
+
+# =============================================================================
+# dev rm <name>
+# =============================================================================
+cmd_rm() {
+  local name="$1"
+  if [[ ! -f "$CONF_DIR/${name}.conf" ]]; then
+    echo "  設定がありません: $name"; return 1
+  fi
+  if tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$name"; then
+    tmux kill-window -t "$SESSION:$name"
+    echo "  [${name}] stopped"
+  fi
+  rm "$CONF_DIR/${name}.conf"
+  echo "  [${name}] removed"
+}
+
+# =============================================================================
+# dev restart <name>
+# =============================================================================
+cmd_restart() {
+  local name="$1"
+  local t="$SESSION:$name"
+
+  if ! tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$name"; then
+    echo "  [${name}] not running"; return 1
+  fi
+
+  load_conf "$name"
+  local dir; dir=$(eval echo "$PROJECT_DIR")
+  local dir3; dir3=$(resolve_dir "$dir" "$PANE3_DIR")
+  local dir4; dir4=$(resolve_dir "$dir" "$PANE4_DIR")
+
+  for p in 3 4; do
+    tmux send-keys -t "${t}.${p}" C-c
+    sleep 0.5
+    tmux send-keys -t "${t}.${p}" 'clear' Enter
+    tmux clear-history -t "${t}.${p}"
+  done
+
+  [[ -n "$PANE3_DIR" ]] && tmux send-keys -t "${t}.3" "cd $(printf '%q' "$dir3")" Enter
+  [[ -n "$PANE3_CMD" ]] && tmux send-keys -t "${t}.3" "$PANE3_CMD" Enter
+  [[ -n "$PANE4_DIR" ]] && tmux send-keys -t "${t}.4" "cd $(printf '%q' "$dir4")" Enter
+  [[ -n "$PANE4_CMD" ]] && tmux send-keys -t "${t}.4" "$PANE4_CMD" Enter
+
+  echo "  [${name}] restarted"
+}
+
+# =============================================================================
+# dev stop [name]
+# =============================================================================
+cmd_stop() {
+  local name="${1:-}"
+  if [[ -z "$name" ]]; then
+    tmux kill-session -t "$SESSION" 2>/dev/null && echo "  session stopped" || echo "  not running"
+  else
+    if tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$name"; then
+      tmux kill-window -t "$SESSION:$name"; echo "  [${name}] stopped"
+    else echo "  [${name}] not running"; fi
+  fi
+}
+
+# =============================================================================
+# dev ls
+# =============================================================================
+cmd_ls() {
+  local running=""
+  tmux has-session -t "$SESSION" 2>/dev/null && \
+    running=$(tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null || true)
+
+  local found=false
+  if ls "$CONF_DIR"/*.conf &>/dev/null; then
+    for conf in "$CONF_DIR"/*.conf; do
+      found=true
+      local name; name=$(basename "$conf" .conf)
+      PROJECT_DIR="$HOME"; PANE3_CMD=""; PANE4_CMD=""
+      source "$conf"
+      local d; d=$(eval echo "$PROJECT_DIR"); d="${d/#$HOME/~}"
+      local mark="  "
+      echo "$running" | grep -qx "$name" 2>/dev/null && mark="▶ "
+      echo "${mark}${name}  →  ${d}"
+      [[ -n "$PANE3_CMD" ]] && echo "    srv: $PANE3_CMD"
+      [[ -n "$PANE4_CMD" ]] && echo "    fnt: $PANE4_CMD"
+    done
+  fi
+  [[ "$found" == false ]] && echo "  プロジェクトなし。 dev add で作成"
+}
+
+# =============================================================================
+# dev clear [name]
+# =============================================================================
+cmd_clear() {
+  local name="${1:-}"
+  [[ -z "$name" ]] && { [[ -n "${TMUX:-}" ]] && name=$(tmux display-message -p '#W') || { echo "  名前を指定してください"; return 1; }; }
+  for pane in $(tmux list-panes -t "$SESSION:$name" -F '#{pane_id}' 2>/dev/null); do
+    tmux send-keys -t "$pane" 'clear' Enter; tmux clear-history -t "$pane"
+  done
+  echo "  [${name}] cleared"
+}
+
+# =============================================================================
+# メイン
+# =============================================================================
+case "${1:-}" in
+  add)     cmd_add "${2:-}" "${3:-}" ;;
+  edit)    [[ -z "${2:-}" ]] && { echo "Usage: dev edit <n>"; exit 1; }; cmd_edit "$2" ;;
+  config)  cmd_config "${2:-}" ;;
+  rm|remove) [[ -z "${2:-}" ]] && { echo "Usage: dev rm <n>"; exit 1; }; cmd_rm "$2" ;;
+  restart) [[ -z "${2:-}" ]] && { echo "Usage: dev restart <n>"; exit 1; }; cmd_restart "$2" ;;
+  stop)    cmd_stop "${2:-}" ;;
+  ls|list) cmd_ls ;;
+  status)  if tmux has-session -t "$SESSION" 2>/dev/null; then tmux list-windows -t "$SESSION" -F "  #W (#{window_panes} panes)"; else echo "  not running"; fi ;;
+  clear)   cmd_clear "${2:-}" ;;
+  help|-h|--help) cat << 'HELP'
+dev-tmux
+
+  dev                    全プロジェクトを開く (セッションあればアタッチ)
+  dev add [name] [dir]   作成 (省略=カレントdir名、セッション中なら自動追加)
+  dev config [name]      ペイン設定を対話編集
+  dev edit <name>        エディタで設定ファイルを開く
+  dev rm <name>          プロジェクト削除
+  dev restart <name>     ペイン3,4を再起動
+  dev stop [name]        終了 (省略でセッション全体を終了)
+  dev ls                 プロジェクト一覧
+  dev status             実行中ウィンドウの一覧
+  dev clear [name]       全ペインのログクリア
+
+tmux内キーバインド:
+  マウスクリック   ペイン移動
+  Shift+左右       ウィンドウ切り替え
+  Option+C         現在のペインをクリア
+  Option+D         全ペインをクリア
+  Option+R         ペイン3,4を再起動
+  Option+S         ペイン3,4を停止 (Ctrl+C送信)
+  Ctrl+] → q       ペイン番号表示 → 番号でジャンプ
+  Ctrl+] → |       左右分割
+  Ctrl+] → -       上下分割
+  Ctrl+] → r       設定リロード
+
+  ┌───────────┬───────┬───────┐
+  │ 1: Claude │ 3:srv │ 4:fnt │
+  ├───────────┤       │       │
+  │ 2: free   │       │       │
+  └───────────┴───────┴───────┘
+HELP
+    ;;
+  "") cmd_default ;;
+  *)  cmd_open "$1" ;;
+esac

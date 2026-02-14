@@ -1,0 +1,10 @@
+# Ghostty config
+
+# Option キーを Alt(Meta) として送信 (tmuxのOption+キー操作に必須)
+macos-option-as-alt = true
+
+# マウスで選択したらクリップボードにコピー (tmux外でも有効)
+copy-on-select = clipboard
+
+# SSH統合
+shell-integration-features = ssh-terminfo,ssh-env
