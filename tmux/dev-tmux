@@ -20,6 +20,21 @@ load_conf() {
 
 conf_exists() { [[ -f "$CONF_DIR/${1}.conf" ]]; }
 
+_esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g; s/`/\\`/g'; }
+
+save_conf() {
+  local name="$1"
+  local f="$CONF_DIR/${name}.conf"
+  printf '%s\n' "# プロジェクト: $name" "" > "$f"
+  printf 'PROJECT_DIR="%s"\n\n' "$(_esc "$PROJECT_DIR")" >> "$f"
+  printf 'PANE1_CMD="%s"\n'    "$(_esc "$PANE1_CMD")"    >> "$f"
+  printf 'PANE2_CMD="%s"\n'    "$(_esc "$PANE2_CMD")"    >> "$f"
+  printf 'PANE3_DIR="%s"\n'    "$(_esc "$PANE3_DIR")"    >> "$f"
+  printf 'PANE3_CMD="%s"\n'    "$(_esc "$PANE3_CMD")"    >> "$f"
+  printf 'PANE4_DIR="%s"\n'    "$(_esc "$PANE4_DIR")"    >> "$f"
+  printf 'PANE4_CMD="%s"\n'    "$(_esc "$PANE4_CMD")"    >> "$f"
+}
+
 resolve_dir() {
   local base="$1" sub="$2"
   if [[ -z "$sub" ]]; then echo "$base"
@@ -162,18 +177,11 @@ cmd_add() {
     return 0
   fi
 
-  cat > "$conf" << EOF
-# プロジェクト: $name
-
-PROJECT_DIR="$dir"
-
-PANE1_CMD=""
-PANE2_CMD=""
-PANE3_DIR=""
-PANE3_CMD=""
-PANE4_DIR=""
-PANE4_CMD=""
-EOF
+  PROJECT_DIR="$dir"
+  PANE1_CMD=""; PANE2_CMD=""
+  PANE3_DIR=""; PANE3_CMD=""
+  PANE4_DIR=""; PANE4_CMD=""
+  save_conf "$name"
 
   echo "  作成: $name ($dir)"
 
@@ -237,43 +245,29 @@ cmd_config() {
     echo "  e) エディタ  q) 終了"
     echo ""
     printf "選択: "
-    read -r choice
+    read -e -r choice
 
     case "$choice" in
       3)
         echo "  (空Enter = クリア、- = スキップ)"
         printf "  コマンド [${PANE3_CMD:-(なし)}]: "
-        read -r val
-        if [[ "$val" != "-" ]]; then
-          PANE3_CMD="$val"
-          sed -i '' "s|^PANE3_CMD=.*|PANE3_CMD=\"$val\"|" "$conf" 2>/dev/null || \
-          sed -i    "s|^PANE3_CMD=.*|PANE3_CMD=\"$val\"|" "$conf"
-        fi
+        read -e -r val
+        [[ "$val" != "-" ]] && PANE3_CMD="$val"
         printf "  サブdir [${PANE3_DIR:-(なし)}]: "
-        read -r val
-        if [[ "$val" != "-" ]]; then
-          PANE3_DIR="$val"
-          sed -i '' "s|^PANE3_DIR=.*|PANE3_DIR=\"$val\"|" "$conf" 2>/dev/null || \
-          sed -i    "s|^PANE3_DIR=.*|PANE3_DIR=\"$val\"|" "$conf"
-        fi
+        read -e -r val
+        [[ "$val" != "-" ]] && PANE3_DIR="$val"
+        save_conf "$name"
         echo "  → 保存"
         ;;
       4)
         echo "  (空Enter = クリア、- = スキップ)"
         printf "  コマンド [${PANE4_CMD:-(なし)}]: "
-        read -r val
-        if [[ "$val" != "-" ]]; then
-          PANE4_CMD="$val"
-          sed -i '' "s|^PANE4_CMD=.*|PANE4_CMD=\"$val\"|" "$conf" 2>/dev/null || \
-          sed -i    "s|^PANE4_CMD=.*|PANE4_CMD=\"$val\"|" "$conf"
-        fi
+        read -e -r val
+        [[ "$val" != "-" ]] && PANE4_CMD="$val"
         printf "  サブdir [${PANE4_DIR:-(なし)}]: "
-        read -r val
-        if [[ "$val" != "-" ]]; then
-          PANE4_DIR="$val"
-          sed -i '' "s|^PANE4_DIR=.*|PANE4_DIR=\"$val\"|" "$conf" 2>/dev/null || \
-          sed -i    "s|^PANE4_DIR=.*|PANE4_DIR=\"$val\"|" "$conf"
-        fi
+        read -e -r val
+        [[ "$val" != "-" ]] && PANE4_DIR="$val"
+        save_conf "$name"
         echo "  → 保存"
         ;;
       e) "${EDITOR:-vim}" "$conf"; load_conf "$name" ;;
